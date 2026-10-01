@@ -118,9 +118,11 @@ class Platform:
         """从落盘审计回放最后一次换向，恢复换向间隔计时。"""
 
         try:
-            records = self.audit.to_records(self.audit.replay_from_journal(limit=100_000))
+            raw_audit, _integrity_report = self.audit.replay_all_verified(mode="strict")
+            records = self.audit.to_records(raw_audit[-100_000:])
         except CokeError:
-            return
+            # 合规启动必须拒绝不可信流水；恢复失败不吞掉，运维先按段定位再补齐。
+            raise
         reversals = [item for item in records if item.action == "reverse_complete"]
         # 只接受不晚于当前时钟的回放记录；可推进时钟重置后，上一轮留下的未来
         # 时间戳属于过期状态，不能拿它把换向间隔计时顶到当前时刻之前。

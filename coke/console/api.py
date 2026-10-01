@@ -39,6 +39,9 @@ class Api:
         add("GET", "/api/topology", lambda params, body: self._platform.topology_summary())
         add("GET", "/api/namespaces", lambda params, body: self._platform.namespaces_describe())
         add("GET", "/api/audit", self._audit)
+        add("GET", "/api/audit/integrity", self._integrity_status)
+        add("POST", "/api/audit/verify", self._verify_integrity)
+        add("POST", "/api/audit/repair-segment", self._repair_segment)
         add("GET", "/api/alarms", lambda params, body: {"alarms": self._platform.audit.alarms()})
         add("GET", "/api/events", self._events)
         add("GET", "/api/trend", self._trend)
@@ -82,6 +85,29 @@ class Api:
         limit = int(params.get("limit", 100))
         return {"entries": self._platform.audit.entries(limit=limit)}
 
+    def _integrity_status(self, params: dict, body: dict) -> dict:
+        return {"integrity": self._platform.audit.integrity_status()}
+
+    def _verify_integrity(self, params: dict, body: dict) -> dict:
+        mode = str(body.get("mode", "strict"))
+        if mode not in ("strict", "partial"):
+            raise CokeError("审计校验模式必须是 strict 或 partial", component="console")
+        return {"integrity": self._platform.audit.verify_integrity(mode=mode, trigger="console")}
+
+    def _repair_segment(self, params: dict, body: dict) -> dict:
+        try:
+            segment = int(body["segment"])
+            records = body["records"]
+        except (KeyError, TypeError, ValueError) as error:
+            raise CokeError("补齐请求必须携带整数段号和 records 数组", component="console") from error
+        if not isinstance(records, list):
+            raise CokeError("补齐请求 records 必须是数组", component="console")
+        request_id = body.get("request_id")
+        result = self._platform.audit.repair_segment(
+            segment, records, request_id=None if request_id is None else str(request_id), trigger="console"
+        )
+        return {"repair": result, "integrity": self._platform.audit.integrity_status()}
+
     def _events(self, params: dict, body: dict) -> dict:
         topic = params.get("topic")
         return {"events": [event.as_dict() for event in self._platform.bus.history(topic)]}
@@ -119,7 +145,12 @@ class Api:
         }
         segment = params.get("segment")
         if segment is not None:
-            payload["records"] = self._platform.audit.replay_segment(int(segment))
+            mode = params.get("mode", "strict")
+            if mode not in ("strict", "partial"):
+                raise CokeError("审计读取模式必须是 strict 或 partial", component="console")
+            records, verification = self._platform.audit.replay_segment_verified(int(segment), mode=mode)
+            payload["records"] = records
+            payload["integrity"] = verification
         return payload
 
     def _readiness(self, params: dict, body: dict) -> dict:
