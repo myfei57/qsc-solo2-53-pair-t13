@@ -6,9 +6,17 @@
 
 from __future__ import annotations
 
+from .integrity import IntegrityChain, record_digest
 from .log import AuditLog
 from .record import AuditRecord
 from .report import summarize
 from .timeline import build_timeline
 
-__all__ = ["AuditLog", "AuditRecord", "summarize", "build_timeline"]
+__all__ = [
+    "AuditLog",
+    "AuditRecord",
+    "IntegrityChain",
+    "record_digest",
+    "summarize",
+    "build_timeline",
+]

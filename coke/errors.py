@@ -45,3 +45,11 @@ class ConfigError(CokeError):
 
 class NamespaceError(CokeError):
     """命名空间重复注册或解析失败。"""
+
+
+class IntegrityError(CokeError):
+    """审计流水完整性校验失败（篡改、缺段或链头对不上）。
+
+    严格读取（取证回放）遇到完整性问题时直接拒绝，由这一类异常承载第一个
+    定位到的问题段；标记读取不走异常路径，而是把段状态逐条带给调用方。
+    """

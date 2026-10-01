@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from coke.console.api import Api
 from coke.console.server import ConsoleServer, probe_endpoints
 
@@ -88,3 +90,40 @@ def test_server_serves_real_http(platform):
     assert probe["/api/topology"]["ok"] is True
     assert probe["/api/nope"]["ok"] is False
     assert server.port == 0
+
+
+def test_audit_integrity_endpoint_reports_chain_and_localizes_tamper(platform):
+    api = Api(platform)
+    platform.start()
+    platform.charge(oven="oven01", hopper_target_mm=0.0, hopper_measured_mm=0.0)
+    status, payload = api.handle("GET", "/api/audit/integrity", {}, {})
+    assert status == 200
+    assert payload["verification"]["status"] == "ok"
+    assert payload["backfill_ledger"] == []
+
+    # 直接改盘上的段文件，结论必须能查到并定位到段，且不影响接口响应。
+    journal = platform.audit.journal
+    path = journal.segment_path(0)
+    with open(path, "r", encoding="utf-8") as handle:
+        lines = [line for line in handle.read().splitlines() if line.strip()]
+    envelope = json.loads(lines[0])
+    envelope["rec"]["message"] = "tampered-via-disk"
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(envelope, ensure_ascii=False) + "\n")
+        handle.write("\n".join(lines[1:]) + "\n")
+
+    status, payload = api.handle("GET", "/api/audit/integrity", {"read": "marked"}, {})
+    assert status == 200
+    assert payload["verification"]["status"] == "tampered"
+    assert payload["verification"]["first_fault"]["segment"] == 0
+    # 链断后严格段读取返回 409 而不是 500（错误留痕失败不能盖掉完整性结论）。
+    status, error = api.handle("GET", "/api/journal", {"segment": "0"}, {})
+    assert status == 409
+    assert error["error"] == "IntegrityError"
+
+
+def test_audit_backfill_endpoint_requires_segment_and_envelopes(platform):
+    api = Api(platform)
+    status, payload = api.handle("POST", "/api/audit/backfill", {}, {"segment": 1})
+    assert status == 409
+    assert payload["component"] == "console"

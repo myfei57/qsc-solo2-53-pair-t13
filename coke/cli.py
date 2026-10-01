@@ -1,13 +1,14 @@
 """命令行入口。
 
-五个子命令覆盖日常使用：
+六个子命令覆盖日常使用：
 
-``serve``   启动控制台 HTTP 服务，可选地在启动后探测接口；
-``demo``    在本地跑一遍完整流程（启动 → 装煤 → 换向 → 推焦 → 熄焦 → 清扫 →
-            控制周期 → 并发探测 → 行程标定），用于交付前的真实运行检查；
-``status``  打印当前状态快照；
-``config``  打印生效配置；
-``reset``   清掉落盘的平台计数。
+``serve``        启动控制台 HTTP 服务，可选地在启动后探测接口；
+``demo``         在本地跑一遍完整流程（启动 → 装煤 → 换向 → 推焦 → 熄焦 → 清扫 →
+                 控制周期 → 并发探测 → 行程标定），用于交付前的真实运行检查；
+``status``       打印当前状态快照；
+``config``       打印生效配置；
+``reset``        清掉落盘的平台计数；
+``verify-audit`` 对审计流水做一次整链完整性校验，定位问题段并落审计结论。
 """
 
 from __future__ import annotations
@@ -138,6 +139,30 @@ def _cmd_reset(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_verify_audit(args: argparse.Namespace) -> int:
+    """整链一次验；结论同时落一条审计流水，退出码 0 通过、3 不通过。"""
+
+    platform = _build(args)
+    verification = platform.audit.verify_integrity(triggered_by="cli")
+    payload = {
+        key: verification[key]
+        for key in (
+            "check_id",
+            "status",
+            "audit_recorded",
+            "segments_checked",
+            "next_seq",
+            "head_digest",
+            "first_fault",
+            "faults",
+        )
+    }
+    # 盘上原始行数与链上序号对照：行数对不上而链状态还在，多半是直接动了文件。
+    payload["raw_rows_on_disk"] = len(platform.audit.raw_journal_scan())
+    _dump(payload)
+    return 0 if verification["status"] == "ok" else 3
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构造命令行解析器。"""
 
@@ -170,6 +195,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     reset = sub.add_parser("reset", help="清掉落盘的平台计数", parents=[common])
     reset.set_defaults(func=_cmd_reset)
+
+    verify_audit = sub.add_parser("verify-audit", help="整链校验审计流水完整性", parents=[common])
+    verify_audit.set_defaults(func=_cmd_verify_audit)
     return parser
 
 

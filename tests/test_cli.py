@@ -48,3 +48,16 @@ def test_serve_with_probe(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["listening"].startswith("http://")
     assert payload["probe"]["/api/status"]["ok"] is True
+
+
+def test_verify_audit_reports_ok_and_exit_zero(tmp_path, capsys):
+    storage = str(tmp_path / "state")
+    assert main(["--storage-root", storage, "demo", "--fast", "--rounds", "2"]) == 0
+    capsys.readouterr()  # 丢弃 demo 输出
+    code = main(["--storage-root", storage, "verify-audit"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["status"] == "ok"
+    assert payload["audit_recorded"] is True
+    assert payload["first_fault"] is None
+    assert payload["raw_rows_on_disk"] >= 1

@@ -45,6 +45,8 @@ class Api:
         add("GET", "/api/store", self._store)
         add("GET", "/api/timeline", self._timeline)
         add("GET", "/api/journal", self._journal)
+        add("GET", "/api/audit/integrity", self._audit_integrity)
+        add("POST", "/api/audit/backfill", self._audit_backfill)
         add("GET", "/api/readiness", self._readiness)
         add("POST", "/api/step", self._step)
         add("POST", "/api/charge", self._charge)
@@ -74,7 +76,12 @@ class Api:
             payload = handler(merged, body)
         except CokeError as error:
             # 控制台拒绝的动作也要留痕，便于巡检区分"谁触发了哪条联锁"。
-            self._platform.note_error(error)
+            # 审计链本身已损坏时（IntegrityError），错误记录无法再追加，不能
+            # 因为留痕失败把原始的完整性结论盖掉——保留原异常响应即可。
+            try:
+                self._platform.note_error(error)
+            except CokeError:
+                pass
             return 409, {"error": type(error).__name__, **error.as_record()}
         return 200, payload
 
@@ -121,6 +128,40 @@ class Api:
         if segment is not None:
             payload["records"] = self._platform.audit.replay_segment(int(segment))
         return payload
+
+    def _audit_integrity(self, params: dict, body: dict) -> dict:
+        """整链一次验；结论既返回控制台，也由审计层落一条流水。
+
+        ``read=marked`` 时同时返回标记读结果：完段记录给内容、问题段只给
+        定位结论，供控制台在链不完整时仍能展示可信前缀。
+        """
+
+        verification = self._platform.audit.verify_integrity(triggered_by="console")
+        payload: dict = {
+            "verification": verification,
+            "backfill_ledger": self._platform.audit.backfill_ledger(),
+        }
+        if params.get("read") == "marked":
+            marked = self._platform.audit.replay_marked()
+            payload["marked"] = {"records": marked["records"], "integrity": marked["integrity"]}
+        return payload
+
+    def _audit_backfill(self, params: dict, body: dict) -> dict:
+        """补缺失段：内容必须是原始链封套，保序、幂等、动作落审计。"""
+
+        if "segment" not in body or not isinstance(body.get("envelopes"), list):
+            raise CokeError("补段请求必须带 segment 与 envelopes（链封套列表）", component="console")
+        try:
+            segment = int(body["segment"])
+        except (TypeError, ValueError) as error:
+            raise CokeError("segment 必须是非负整数", component="console") from error
+        result = self._platform.audit.backfill_segment(
+            segment,
+            body["envelopes"],
+            source=str(body.get("source", "console")),
+            triggered_by="console",
+        )
+        return {"backfill": result}
 
     def _readiness(self, params: dict, body: dict) -> dict:
         platform = self._platform
